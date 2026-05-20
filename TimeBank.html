@@ -31,132 +31,165 @@ button,input{font-size:16px;padding:10px 12px;border-radius:8px;border:1px solid
 
 <script>
 (() => {
-const clock = document.getElementById('clock');
-const storedEl = document.getElementById('stored');
-const startBtn = document.getElementById('start');
-const pauseBtn = document.getElementById('pause');
-const resetBtn = document.getElementById('reset');
-const add30 = document.getElementById('add30');
-const add1m = document.getElementById('add1m');
+  const clock = document.getElementById('clock');
+  const storedEl = document.getElementById('stored');
+  const startBtn = document.getElementById('start');
+  const pauseBtn = document.getElementById('pause');
+  const resetBtn = document.getElementById('reset');
+  const add30 = document.getElementById('add30');
+  const add1m = document.getElementById('add1m');
 
-let mode = 'deposit'; // deposit = add to bank, use = subtract from bank while running
-let running = false;
-let lastTs = 0;
-let sessionElapsed = 0; // ms for current running session
-let bank = 0; // stored ms
-let raf = null;
+  const STORAGE_KEY = 'timebank:v1';
 
-function fmt(ms){
-const s = Math.max(0, Math.floor(ms/1000));
-const hh = Math.floor(s/3600);
-const mm = Math.floor((s%3600)/60);
-const ss = s%60;
-return [hh,mm,ss].map(n=>String(n).padStart(2,'0')).join(':');
-}
+  let mode = 'deposit'; // deposit = add to bank, use = subtract from bank while running
+  let running = false;
+  let lastTs = 0;
+  let sessionElapsed = 0; // ms for current running session
+  let bank = 0; // stored ms
+  let raf = null;
 
-function updateUI(){
-if(mode==='deposit'){
-clock.textContent = fmt(sessionElapsed);
-} else {
-// show remaining session withdraw (sessionElapsed is amount used so far)
-clock.textContent = fmt(Math.max(0, bank - sessionElapsed));
-}
-storedEl.textContent = fmt(bank);
-}
+  // load from storage
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const obj = JSON.parse(raw);
+      if (typeof obj.bank === 'number') bank = obj.bank;
+      if (obj.mode === 'deposit' || obj.mode === 'use') mode = obj.mode;
+    } catch (e) {
+      console.error('Failed to load timebank', e);
+    }
+  }
 
-function tick(now){
-if(!running) return;
-const dt = now - lastTs;
-lastTs = now;
-if(mode === 'deposit'){
-sessionElapsed += dt;
-// when stopped, we'll add sessionElapsed to bank
-} else {
-sessionElapsed += dt;
-if(sessionElapsed >= bank){
-// drained
-// clamp and stop
-sessionElapsed = bank;
-stop();
-notifyEmpty();
-}
-}
-updateUI();
-raf = requestAnimationFrame(tick);
-}
+  // save to storage
+  function save() {
+    try {
+      const obj = { bank, mode };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+    } catch (e) {
+      console.error('Failed to save timebank', e);
+    }
+  }
 
-function start(){
-if(running) return;
-running = true;
-lastTs = performance.now();
-raf = requestAnimationFrame(tick);
-}
+  function fmt(ms){
+    const s = Math.max(0, Math.floor(ms/1000));
+    const hh = Math.floor(s/3600);
+    const mm = Math.floor((s%3600)/60);
+    const ss = s%60;
+    return [hh,mm,ss].map(n=>String(n).padStart(2,'0')).join(':');
+  }
 
-function stop(){
-if(!running) return;
-running = false;
-cancelAnimationFrame(raf);
-// commit session
-if(mode === 'deposit'){
-bank += sessionElapsed;
-} else {
-bank = Math.max(0, bank - sessionElapsed);
-}
-sessionElapsed = 0;
-updateUI();
-}
+  function updateUI(){
+    if(mode==='deposit'){
+      clock.textContent = fmt(sessionElapsed);
+    } else {
+      clock.textContent = fmt(Math.max(0, bank - sessionElapsed));
+    }
+    storedEl.textContent = fmt(bank);
+  }
 
-function pauseToggle(){
-if(running) stop(); else start();
-}
+  function tick(now){
+    if(!running) return;
+    const dt = now - lastTs;
+    lastTs = now;
+    if(mode === 'deposit'){
+      sessionElapsed += dt;
+    } else {
+      sessionElapsed += dt;
+      if(sessionElapsed >= bank){
+        sessionElapsed = bank;
+        stop(true);
+        notifyEmpty();
+      }
+    }
+    updateUI();
+    raf = requestAnimationFrame(tick);
+  }
 
-function resetStored(){
-bank = 0;
-sessionElapsed = 0;
-running = false;
-cancelAnimationFrame(raf);
-updateUI();
-}
+  function start(){
+    if(running) return;
+    running = true;
+    lastTs = performance.now();
+    raf = requestAnimationFrame(tick);
+  }
 
-function notifyEmpty(){
-if(navigator.vibrate) navigator.vibrate([200,100,200]);
-if('speechSynthesis' in window){
-const u = new SpeechSynthesisUtterance('Time bank empty');
-speechSynthesis.speak(u);
-}
-alert('Time bank empty');
-}
+  // stop and optionally commit; if commit=false used when drained to avoid double-saving
+  function stop(committed = false){
+    if(!running) return;
+    running = false;
+    cancelAnimationFrame(raf);
+    // commit session
+    if(mode === 'deposit'){
+      bank += sessionElapsed;
+    } else {
+      bank = Math.max(0, bank - sessionElapsed);
+    }
+    sessionElapsed = 0;
+    updateUI();
+    if(!committed) save();
+  }
 
-// mode radio
-document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', e=>{
-// if switching while running: commit current session before switching to behave predictably
-if(running){
-stop();
-}
-mode = e.target.value;
-sessionElapsed = 0;
-updateUI();
-}));
+  function pauseToggle(){
+    if(running) stop(); else start();
+  }
 
-startBtn.addEventListener('click', start);
-pauseBtn.addEventListener('click', pauseToggle);
-resetBtn.addEventListener('click', resetStored);
+  function resetStored(){
+    bank = 0;
+    sessionElapsed = 0;
+    running = false;
+    cancelAnimationFrame(raf);
+    save();
+    updateUI();
+  }
 
-add30.addEventListener('click', ()=>{
-bank += 30*1000;
-updateUI();
-});
-add1m.addEventListener('click', ()=>{
-bank += 60*1000;
-updateUI();
-});
+  function notifyEmpty(){
+    if(navigator.vibrate) navigator.vibrate([200,100,200]);
+    if('speechSynthesis' in window){
+      const u = new SpeechSynthesisUtterance('Time bank empty');
+      speechSynthesis.speak(u);
+    }
+    alert('Time bank empty');
+    // ensure bank saved as zero
+    save();
+  }
 
-// keyboard space to start/stop (desktop)
-document.addEventListener('keydown', e=>{ if(e.code==='Space') { e.preventDefault(); pauseToggle(); } });
+  // mode radio
+  document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', e=>{
+    // commit current session before switching
+    if(running){
+      stop();
+    }
+    mode = e.target.value;
+    sessionElapsed = 0;
+    save();
+    updateUI();
+  }));
 
-// init
-updateUI();
+  startBtn.addEventListener('click', start);
+  pauseBtn.addEventListener('click', pauseToggle);
+  resetBtn.addEventListener('click', resetStored);
+
+  add30.addEventListener('click', ()=>{
+    bank += 30*1000;
+    save();
+    updateUI();
+  });
+  add1m.addEventListener('click', ()=>{
+    bank += 60*1000;
+    save();
+    updateUI();
+  });
+
+  document.addEventListener('keydown', e=>{ if(e.code==='Space') { e.preventDefault(); pauseToggle(); } });
+
+  // initialize from storage and UI
+  load();
+  // set radio based on loaded mode
+  const radios = document.querySelectorAll('input[name="mode"]');
+  radios.forEach(r => { if(r.value === mode) r.checked = true; });
+  updateUI();
 })();
 </script>
+
 </body>
 </html>

@@ -1,0 +1,162 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Time Bank</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:#fff;color:#111;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
+.display{font-size:56px;font-weight:600;margin:8px 0}
+.balance{font-size:14px;color:#555;margin-bottom:8px}
+.controls{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:8px}
+button,input{font-size:16px;padding:10px 12px;border-radius:8px;border:1px solid #ccc;background:#f6f6f8}
+.mode{margin-top:10px}
+</style>
+</head>
+<body>
+<div class="display" id="clock">00:00:00</div>
+<div class="balance">Stored time: <span id="stored">00:00:00</span></div>
+
+<div class="controls">
+<button id="start">Start</button>
+<button id="pause">Pause</button>
+<button id="reset">Reset Stored</button>
+<button id="add30">+30s</button>
+<button id="add1m">+1m</button>
+</div>
+
+<div class="mode">
+<label><input type="radio" name="mode" value="deposit" checked> Deposit (store time)</label>
+<label style="margin-left:12px"><input type="radio" name="mode" value="use"> Use (withdraw time)</label>
+</div>
+
+<script>
+(() => {
+const clock = document.getElementById('clock');
+const storedEl = document.getElementById('stored');
+const startBtn = document.getElementById('start');
+const pauseBtn = document.getElementById('pause');
+const resetBtn = document.getElementById('reset');
+const add30 = document.getElementById('add30');
+const add1m = document.getElementById('add1m');
+
+let mode = 'deposit'; // deposit = add to bank, use = subtract from bank while running
+let running = false;
+let lastTs = 0;
+let sessionElapsed = 0; // ms for current running session
+let bank = 0; // stored ms
+let raf = null;
+
+function fmt(ms){
+const s = Math.max(0, Math.floor(ms/1000));
+const hh = Math.floor(s/3600);
+const mm = Math.floor((s%3600)/60);
+const ss = s%60;
+return [hh,mm,ss].map(n=>String(n).padStart(2,'0')).join(':');
+}
+
+function updateUI(){
+if(mode==='deposit'){
+clock.textContent = fmt(sessionElapsed);
+} else {
+// show remaining session withdraw (sessionElapsed is amount used so far)
+clock.textContent = fmt(Math.max(0, bank - sessionElapsed));
+}
+storedEl.textContent = fmt(bank);
+}
+
+function tick(now){
+if(!running) return;
+const dt = now - lastTs;
+lastTs = now;
+if(mode === 'deposit'){
+sessionElapsed += dt;
+// when stopped, we'll add sessionElapsed to bank
+} else {
+sessionElapsed += dt;
+if(sessionElapsed >= bank){
+// drained
+// clamp and stop
+sessionElapsed = bank;
+stop();
+notifyEmpty();
+}
+}
+updateUI();
+raf = requestAnimationFrame(tick);
+}
+
+function start(){
+if(running) return;
+running = true;
+lastTs = performance.now();
+raf = requestAnimationFrame(tick);
+}
+
+function stop(){
+if(!running) return;
+running = false;
+cancelAnimationFrame(raf);
+// commit session
+if(mode === 'deposit'){
+bank += sessionElapsed;
+} else {
+bank = Math.max(0, bank - sessionElapsed);
+}
+sessionElapsed = 0;
+updateUI();
+}
+
+function pauseToggle(){
+if(running) stop(); else start();
+}
+
+function resetStored(){
+bank = 0;
+sessionElapsed = 0;
+running = false;
+cancelAnimationFrame(raf);
+updateUI();
+}
+
+function notifyEmpty(){
+if(navigator.vibrate) navigator.vibrate([200,100,200]);
+if('speechSynthesis' in window){
+const u = new SpeechSynthesisUtterance('Time bank empty');
+speechSynthesis.speak(u);
+}
+alert('Time bank empty');
+}
+
+// mode radio
+document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', e=>{
+// if switching while running: commit current session before switching to behave predictably
+if(running){
+stop();
+}
+mode = e.target.value;
+sessionElapsed = 0;
+updateUI();
+}));
+
+startBtn.addEventListener('click', start);
+pauseBtn.addEventListener('click', pauseToggle);
+resetBtn.addEventListener('click', resetStored);
+
+add30.addEventListener('click', ()=>{
+bank += 30*1000;
+updateUI();
+});
+add1m.addEventListener('click', ()=>{
+bank += 60*1000;
+updateUI();
+});
+
+// keyboard space to start/stop (desktop)
+document.addEventListener('keydown', e=>{ if(e.code==='Space') { e.preventDefault(); pauseToggle(); } });
+
+// init
+updateUI();
+})();
+</script>
+</body>
+</html>
